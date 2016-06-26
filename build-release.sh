@@ -3,11 +3,17 @@
 CWD=`pwd`
 WORKDIR=sandbox
 
-export CWD WORKDIR
+MAKECONF=${CWD}/mk-mini.conf
+BSDSRCDIR=${CWD}/${WORKDIR}/src
+BSDOBJDIR=${CWD}/${WORKDIR}/obj
+DESTDIR=${WORKDIR}/destdir
+RELEASEDIR=${WORKDIR}/releasedir
+
+export MAKECONF BSDSRCDIR BSDOBJDIR
 
 # Update for each new release
-SHORTREL="56"
-LONGREL="5.6"
+SHORTREL="59"
+LONGREL="5.9"
 
 # No need to change anything below this line for new OS releases!
 
@@ -19,33 +25,24 @@ echo "Cleaning up previous build.."
 rm -rf ${WORKDIR}
 
 echo "Creating sandbox and diststuff.."
-mkdir -p ${WORKDIR}
+mkdir -p ${BSDSRCDIR} ${BSDOBJDIR}
+test -d ${DESTDIR} && mv ${DESTDIR} ${DESTDIR}- && \
+    rm -rf ${DESTDIR}-
+mkdir -p ${DESTDIR} ${RELEASEDIR}
 mkdir -p diststuff
 
 echo "Getting current patches.."
-mkdir ${WORKDIR}/patches
+mkdir -p ${WORKDIR}/patches
 cd ${WORKDIR}/patches
 ftp ${PATCHURL}
 cd ${CWD}
-
-binfiles="base${SHORTREL}.tgz
-etc${SHORTREL}.tgz
-comp${SHORTREL}.tgz
-man${SHORTREL}.tgz"
 
 srcfiles="src.tar.gz
 sys.tar.gz"
 
 cd diststuff
-echo "Downloading binary release.."
-for file in ${binfiles}; do
-  if [ ! -f ${file} ] ; then 
-    echo "Needed ${file}, didn't find it in current dir so downloading.."
-    ftp ${URLBASE}/`machine`/${file}
-  fi
-done
 
-echo "Downloading source.."
+echo "Downloading OpenBSD-${LONGREL} source.."
 for file in ${srcfiles}; do
   if [ ! -f ${file} ] ; then 
     echo "Needed ${file}, didn't find it in current dir so downloading.."
@@ -53,17 +50,6 @@ for file in ${srcfiles}; do
   fi
 done
 
-for file in ${binfiles}; do
-  echo "checking ${file} file integrity"
-  gunzip -t ${file}
-  if [ $? != 0 ] ; then
-   echo "${file} is corrupt! Exiting"
-   exit
-  fi
-  echo "file integrity OK, extracting ${file} to ${WORKDIR}"
-  tar zxpf ${file} -C ../${WORKDIR}
-done
-
 for file in ${srcfiles}; do
   echo "checking ${file} file integrity"
   gunzip -t ${file}
@@ -72,36 +58,30 @@ for file in ${srcfiles}; do
    exit
   fi
   echo "file integrity OK, extracting ${file} to ${WORKDIR}"
-  tar zxpf ${file} -C ../${WORKDIR}/usr/src
+  tar zxpf ${file} -C ../${WORKDIR}/src
 done
 
-cd ..
+cd ${CWD}/${WORKDIR}
 
-echo "Setting up environment.."
+echo "Patching src.."
+for file in patches/*.patch.sig; do
+  signify -Vep /etc/signify/openbsd-59-base.pub -x ${file} -m - | \
+      (cd ${BSDSRCDIR} && patch -p0)
+done
 
-umount ${CWD}/${WORKDIR}/dev
-rm -rf ${CWD}/${WORKDIR}/dev-orig
-mv ${CWD}/${WORKDIR}/dev ${CWD}/${WORKDIR}/dev-orig
-mkdir ${CWD}/${WORKDIR}/dev
-mount_mfs -o nosuid -s 32768 swap ${CWD}/${WORKDIR}/dev
-cp -p ${CWD}/${WORKDIR}/dev-orig/MAKEDEV ${CWD}/${WORKDIR}/dev/MAKEDEV
-cd ${CWD}/${WORKDIR}/dev
-./MAKEDEV std
-cp -p ${CWD}/mk-mini.conf ${CWD}/${WORKDIR}/mk-mini.conf
-cp -p ${CWD}/build-release-injail.sh ${CWD}/${WORKDIR}/
+# rebuild obj dirs
+cd ${BSDSRCDIR} && make obj
 
-# Don't want anything mounted to /mnt when we starts
-umount /mnt
+# build this thing
+cd ${BSDSRCDIR} && make build
 
-echo "Going into chroot to build.."
-/usr/sbin/chroot ${CWD}/${WORKDIR} ./build-release-injail.sh
-
-sleep 4 
-cd
-rm -rf ${CWD}/${WORKDIR}/dev/*
-umount ${CWD}/${WORKDIR}/dev
+cd ${BSDSRCDIR}/etc && doas env MAKECONF=${MAKECONF} \
+    DESTDIR=${DESTDIR} \
+    RELEASEDIR=${RELEASEDIR} \
+    BSDSRCDIR=${BSDSRCDIR} \
+    BSDOBJDIR=${BSDOBJDIR} \
+    make release
 
 echo "DONE! Now build kernel."
 
 exit
-
